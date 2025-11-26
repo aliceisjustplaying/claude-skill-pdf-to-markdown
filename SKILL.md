@@ -73,15 +73,50 @@ test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-ma
 ### Step 3: Load into context
 The markdown output is now available. Display it or use it directly.
 
+## Caching
+
+PDFs are **aggressively cached** to avoid re-processing. First extraction is slow, every subsequent request is instant.
+
+### How It Works
+- **Cache location**: `~/.cache/pdf-to-markdown/<cache_key>/`
+- **Cache key**: Based on file path + size + modification time
+- **Full PDF cached**: Even if you request `--pages 1-10`, the full PDF is extracted and cached. Page slicing happens from the cached result.
+- **Invalidation**: Cache is only cleared when:
+  - Source PDF is modified (size or mtime changes)
+  - You explicitly clear it with `--clear-cache` or `--clear-all-cache`
+
+### Cache Commands
+```bash
+# Clear cache for a specific PDF
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --clear-cache
+
+# Clear entire cache
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py --clear-all-cache
+
+# Show cache statistics
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py --cache-stats
+
+# Bypass cache for this run (still updates cache)
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --no-cache --stdout
+```
+
+### Cache Contents
+```
+~/.cache/pdf-to-markdown/<cache_key>/
+├── metadata.json    # source path, mtime, size, total_pages
+├── full_output.md   # cached full markdown
+└── images/          # extracted images
+```
+
 ## Image Handling
 
 By default, images are:
-1. **Extracted** to `/tmp/pdf_images/<pdf_name>/`
+1. **Extracted** to cache directory `~/.cache/pdf-to-markdown/<cache_key>/images/`
 2. **Referenced** in the markdown with full paths like:
    ```
    ![alt text](image.png)
 
-   **[Image: image.png (800x600, 45.2KB) → /tmp/pdf_images/doc_name/image.png]**
+   **[Image: image.png (800x600, 45.2KB) → ~/.cache/pdf-to-markdown/<key>/images/image.png]**
    ```
 3. **Summarized** in a table at the end of the document
 
@@ -89,7 +124,7 @@ By default, images are:
 
 **IMPORTANT:** When the extracted markdown contains image references like:
 ```
-**[Image: figure_1.png (1200x800, 125.3KB) → /tmp/pdf_images/document/figure_1.png]**
+**[Image: figure_1.png (1200x800, 125.3KB) → /Users/.../.cache/pdf-to-markdown/abc123/images/figure_1.png]**
 ```
 
 And the user asks about something that might be visual (charts, graphs, diagrams, figures, screenshots, layouts, designs, plots, illustrations), **automatically use the Read tool** to view the relevant image file(s) before answering. Don't ask the user - just look at it.
@@ -109,14 +144,11 @@ And the user asks about something that might be visual (charts, graphs, diagrams
 ### Image Options
 
 ```bash
-# Default: extract images to /tmp/pdf_images/<pdf_name>/
+# Default: extract images to cache directory
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --stdout
 
 # Skip images entirely (faster)
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --no-images --stdout
-
-# Custom image directory
-~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --image-dir /path/to/dir --stdout
 ```
 
 ## Output Format
@@ -130,7 +162,8 @@ source: document.pdf
 total_pages: 42
 pages_extracted: 42
 extracted_at: 2025-01-15T10:30:00
-images_dir: /tmp/pdf_images/document
+from_cache: true
+images_dir: /Users/.../.cache/pdf-to-markdown/abc123/images
 ---
 ```
 
@@ -144,7 +177,7 @@ Regular paragraph text with **bold**, *italic*, and `code` formatting.
 
 ![Figure 1](figure_1.png)
 
-**[Image: figure_1.png (800x600, 45.2KB) → /tmp/pdf_images/document/figure_1.png]**
+**[Image: figure_1.png (800x600, 45.2KB) → ~/.cache/pdf-to-markdown/abc123/images/figure_1.png]**
 
 | Column A | Column B |
 |----------|----------|
@@ -159,8 +192,8 @@ Regular paragraph text with **bold**, *italic*, and `code` formatting.
 
 | # | File | Dimensions | Size | Path |
 |---|------|------------|------|------|
-| 1 | figure_1.png | 800x600 | 45.2KB | `/tmp/pdf_images/document/figure_1.png` |
-| 2 | chart_2.png | 1200x800 | 89.1KB | `/tmp/pdf_images/document/chart_2.png` |
+| 1 | figure_1.png | 800x600 | 45.2KB | `~/.cache/pdf-to-markdown/abc123/images/figure_1.png` |
+| 2 | chart_2.png | 1200x800 | 89.1KB | `~/.cache/pdf-to-markdown/abc123/images/chart_2.png` |
 ```
 
 ## Script Reference
@@ -171,16 +204,21 @@ Location: `~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py`
 Usage: pdf_to_md.py <input.pdf> [output.md] [options]
 
 Options:
-  --stdout        Print to stdout instead of file
-  --pages RANGE   Page range (e.g., "1-5" or "1,3,5-7")
-  --no-images     Skip image extraction (faster)
-  --image-dir DIR Custom directory for extracted images
-  --chunked       Output as JSON with page chunks
-  --no-metadata   Skip metadata header in output
-  --workers N     Number of parallel workers (default: all CPU cores)
-  --batch-size N  Pages per worker batch (default: 50)
-  --no-parallel   Disable parallel processing
-  --no-progress   Disable progress indicator
+  --stdout          Print to stdout instead of file
+  --pages RANGE     Page range (e.g., "1-5" or "1,3,5-7")
+  --no-images       Skip image extraction (faster)
+  --chunked         Output as JSON with page chunks
+  --no-metadata     Skip metadata header in output
+  --workers N       Number of parallel workers (default: all CPU cores)
+  --batch-size N    Pages per worker batch (default: 50)
+  --no-parallel     Disable parallel processing
+  --no-progress     Disable progress indicator
+
+Cache Options:
+  --no-cache        Bypass cache, process fresh (still updates cache)
+  --clear-cache     Clear cache for this PDF before processing
+  --clear-all-cache Clear entire cache directory and exit
+  --cache-stats     Show cache statistics and exit
 ```
 
 **Performance:** For PDFs with 100+ pages, the script automatically uses parallel processing across all CPU cores. This provides 3-6x speedup on large documents.
