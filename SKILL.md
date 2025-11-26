@@ -24,9 +24,10 @@ Extract complete PDF content as structured Markdown, preserving:
 - PDF has tables, formatting, or structure to preserve
 
 **DON'T USE** when:
-- User only needs a specific page or section (use --pages)
 - User wants to modify/edit the PDF (use pdf skill)
-- User wants form filling (use pdf skill with forms.md)
+- User wants form filling (use pdf skill)
+
+**USE `--pages`** when user only needs specific pages (faster, less output).
 
 ## Environment Setup
 
