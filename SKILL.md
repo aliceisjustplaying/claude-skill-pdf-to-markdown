@@ -1,0 +1,251 @@
+---
+name: pdf-to-markdown
+description: Convert entire PDF documents to clean, structured Markdown for full context loading. Use this skill when the user wants to extract ALL text from a PDF into context (not grep/search), when discussing or analyzing PDF content in full, when the user mentions "load the whole PDF", "bring the PDF into context", "read the entire PDF", or when partial extraction/grepping would miss important context. This is the preferred method for PDF text extraction over page-by-page or grep approaches.
+---
+
+# PDF to Markdown Converter
+
+Extract complete PDF content as structured Markdown, preserving:
+- Headers (detected by font size, converted to # tags)
+- Bold, italic, monospace formatting
+- Tables (converted to Markdown tables)
+- Lists (ordered and unordered)
+- Multi-column layouts (correct reading order)
+- Code blocks
+- **Images** (extracted to files with paths in output)
+
+## When to Use This Skill
+
+**USE THIS** when:
+- User wants the "whole PDF" or "entire document" in context
+- Analyzing, summarizing, or discussing PDF content
+- User says "load", "read", "bring in", "extract" a PDF
+- Grepping/searching would miss context or structure
+- PDF has tables, formatting, or structure to preserve
+
+**DON'T USE** when:
+- User only needs a specific page or section (use --pages)
+- User wants to modify/edit the PDF (use pdf skill)
+- User wants form filling (use pdf skill with forms.md)
+
+## Environment Setup
+
+This skill uses a dedicated virtual environment at `~/.claude/skills/pdf-to-markdown/.venv/` to avoid polluting the user's working directory.
+
+### First-Time Setup (if .venv doesn't exist)
+```bash
+cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm
+```
+
+### Verify Installation
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf4llm; print('OK')"
+```
+
+## Quick Start
+
+### Using the Script (Recommended)
+
+The script automatically uses the skill's dedicated venv:
+
+```bash
+# Convert PDF to markdown (images extracted by default)
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --stdout
+
+# Skip image extraction (faster, smaller output)
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --no-images --stdout
+
+# Specific pages only
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --pages 1-10 --stdout
+```
+
+## Standard Workflow
+
+When user provides a PDF and wants full content in context:
+
+### Step 1: Ensure the skill venv exists
+```bash
+test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm)
+```
+
+### Step 2: Convert PDF to Markdown
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py "/path/to/document.pdf" --stdout
+```
+
+### Step 3: Load into context
+The markdown output is now available. Display it or use it directly.
+
+## Image Handling
+
+By default, images are:
+1. **Extracted** to `/tmp/pdf_images/<pdf_name>/`
+2. **Referenced** in the markdown with full paths like:
+   ```
+   ![alt text](image.png)
+
+   **[Image: image.png (800x600, 45.2KB) → /tmp/pdf_images/doc_name/image.png]**
+   ```
+3. **Summarized** in a table at the end of the document
+
+### Auto-View Behavior for Images
+
+**IMPORTANT:** When the extracted markdown contains image references like:
+```
+**[Image: figure_1.png (1200x800, 125.3KB) → /tmp/pdf_images/document/figure_1.png]**
+```
+
+And the user asks about something that might be visual (charts, graphs, diagrams, figures, screenshots, layouts, designs, plots, illustrations), **automatically use the Read tool** to view the relevant image file(s) before answering. Don't ask the user - just look at it.
+
+**Examples of when to auto-view images:**
+- User: "What does the chart on page 3 show?" → Read the image file
+- User: "Summarize the figures in this paper" → Read all image files
+- User: "What's in the diagram?" → Read the image file
+- User: "Describe the architecture shown" → Read the image file
+- User: "What are the results?" (and there's a results figure) → Read it
+
+**When NOT to auto-view:**
+- User only asks about text content
+- User explicitly says they don't need images
+- No images were extracted (--no-images was used)
+
+### Image Options
+
+```bash
+# Default: extract images to /tmp/pdf_images/<pdf_name>/
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --stdout
+
+# Skip images entirely (faster)
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --no-images --stdout
+
+# Custom image directory
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py doc.pdf --image-dir /path/to/dir --stdout
+```
+
+## Output Format
+
+The markdown output includes:
+
+### Header (metadata)
+```yaml
+---
+source: document.pdf
+total_pages: 42
+pages_extracted: 42
+extracted_at: 2025-01-15T10:30:00
+images_dir: /tmp/pdf_images/document
+---
+```
+
+### Content with image references
+```markdown
+# Main Title
+
+## Section Header
+
+Regular paragraph text with **bold**, *italic*, and `code` formatting.
+
+![Figure 1](figure_1.png)
+
+**[Image: figure_1.png (800x600, 45.2KB) → /tmp/pdf_images/document/figure_1.png]**
+
+| Column A | Column B |
+|----------|----------|
+| Data 1   | Data 2   |
+```
+
+### Image summary table (at end)
+```markdown
+---
+
+## Extracted Images
+
+| # | File | Dimensions | Size | Path |
+|---|------|------------|------|------|
+| 1 | figure_1.png | 800x600 | 45.2KB | `/tmp/pdf_images/document/figure_1.png` |
+| 2 | chart_2.png | 1200x800 | 89.1KB | `/tmp/pdf_images/document/chart_2.png` |
+```
+
+## Script Reference
+
+Location: `~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py`
+
+```
+Usage: pdf_to_md.py <input.pdf> [output.md] [options]
+
+Options:
+  --stdout        Print to stdout instead of file
+  --pages RANGE   Page range (e.g., "1-5" or "1,3,5-7")
+  --no-images     Skip image extraction (faster)
+  --image-dir DIR Custom directory for extracted images
+  --chunked       Output as JSON with page chunks
+  --no-metadata   Skip metadata header in output
+  --workers N     Number of parallel workers (default: all CPU cores)
+  --batch-size N  Pages per worker batch (default: 50)
+  --no-parallel   Disable parallel processing
+  --no-progress   Disable progress indicator
+```
+
+**Performance:** For PDFs with 100+ pages, the script automatically uses parallel processing across all CPU cores. This provides 3-6x speedup on large documents.
+
+## Advanced Usage
+
+### Extract Specific Pages
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --pages 1-10 --stdout
+```
+
+### Get Page-by-Page Chunks with Metadata
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --chunked --stdout
+```
+
+### Handle Scanned PDFs (OCR)
+For scanned PDFs without extractable text, pymupdf4llm will attempt OCR automatically if Tesseract is available:
+```bash
+# Install Tesseract first (macOS)
+brew install tesseract
+
+# Then convert - OCR happens automatically for image-based pages
+~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py scanned.pdf --stdout
+```
+
+## Troubleshooting
+
+### "No module named pymupdf4llm" or venv doesn't exist
+Recreate the skill's virtual environment:
+```bash
+cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm
+```
+
+### Poor extraction quality
+- Try `marker-pdf` for complex layouts (install into the skill venv):
+  ```bash
+  uv pip install --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python marker-pdf
+  ```
+- For scanned PDFs, ensure Tesseract OCR is installed: `brew install tesseract`
+
+### Very large PDFs
+- Parallel processing is automatic for 100+ pages (uses all CPU cores)
+- Use `--pages` to extract only needed sections
+- Use `--workers N` to limit CPU usage if needed
+- Use `--no-images` to skip image extraction (faster)
+
+### Tables not formatting correctly
+pymupdf4llm handles most tables well. For complex tables:
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "
+import pymupdf4llm
+md_text = pymupdf4llm.to_markdown('doc.pdf', table_strategy='lines_strict')
+print(md_text)
+"
+```
+
+## Comparison with Other Approaches
+
+| Approach | Use Case | Limitations |
+|----------|----------|-------------|
+| **This skill (pymupdf4llm)** | Full document context with images | Large PDFs may exceed context |
+| Grepping PDF | Find specific text | Loses structure, no images |
+| Page-by-page extraction | Targeted pages | Manual, loses cross-page context |
+| Read tool on PDF | Quick preview | Limited formatting preservation |
