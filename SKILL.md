@@ -31,12 +31,12 @@ This skill uses a dedicated virtual environment at `~/.claude/skills/pdf-to-mark
 
 ### First-Time Setup (if .venv doesn't exist)
 ```bash
-cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm
+cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling
 ```
 
 ### Verify Installation
 ```bash
-~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf4llm; print('OK')"
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf4llm; import docling; print('OK')"
 ```
 
 ## Quick Start
@@ -62,7 +62,7 @@ When user provides a PDF and wants full content in context:
 
 ### Step 1: Ensure the skill venv exists
 ```bash
-test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm)
+test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling)
 ```
 
 ### Step 2: Convert PDF to Markdown
@@ -206,12 +206,10 @@ Usage: pdf_to_md.py <input.pdf> [output.md] [options]
 Options:
   --stdout          Print to stdout instead of file
   --pages RANGE     Page range (e.g., "1-5" or "1,3,5-7")
+  --docling         Use Docling AI for high-accuracy tables (~1 sec/page)
+  --images-scale N  Image resolution for Docling mode (default: 4.0)
   --no-images       Skip image extraction (faster)
-  --chunked         Output as JSON with page chunks
   --no-metadata     Skip metadata header in output
-  --workers N       Number of parallel workers (default: all CPU cores)
-  --batch-size N    Pages per worker batch (default: 50)
-  --no-parallel     Disable parallel processing
   --no-progress     Disable progress indicator
 
 Cache Options:
@@ -250,7 +248,7 @@ brew install tesseract
 ### "No module named pymupdf4llm" or venv doesn't exist
 Recreate the skill's virtual environment:
 ```bash
-cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm
+cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling
 ```
 
 ### Poor extraction quality
@@ -276,11 +274,43 @@ print(md_text)
 "
 ```
 
+## High-Accuracy Mode (Docling)
+
+For PDFs with complex tables that need high accuracy, use the `--docling` flag:
+
+```bash
+~/.claude/skills/pdf-to-markdown/.venv/bin/python \
+    ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py \
+    document.pdf --docling --stdout
+```
+
+**When to use `--docling`:**
+- PDF has complex tables (borderless, merged cells, multi-column)
+- Table accuracy is critical (medical data, financial reports)
+- You're seeing garbled table output in default mode
+
+**Trade-offs:**
+- ~1 second per page (vs instant for fast mode)
+- First run downloads AI models (~500MB one-time)
+- Higher-resolution images (4x default)
+
+**Image resolution:**
+```bash
+# Default: 4x resolution (crisp images)
+... --docling --stdout
+
+# Custom resolution (2x for smaller files)
+... --docling --images-scale 2.0 --stdout
+```
+
+**Note:** `--accurate` is an alias for `--docling` for backwards compatibility.
+
 ## Comparison with Other Approaches
 
 | Approach | Use Case | Limitations |
 |----------|----------|-------------|
 | **This skill (pymupdf4llm)** | Full document context with images | Large PDFs may exceed context |
+| **--docling mode** | Complex tables, medical/financial PDFs | Slower (~1 sec/page), larger models |
 | Grepping PDF | Find specific text | Loses structure, no images |
 | Page-by-page extraction | Targeted pages | Manual, loses cross-page context |
 | Read tool on PDF | Quick preview | Limited formatting preservation |
