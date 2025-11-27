@@ -31,12 +31,12 @@ This skill uses a dedicated virtual environment at `~/.claude/skills/pdf-to-mark
 
 ### First-Time Setup (if .venv doesn't exist)
 ```bash
-cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling
+cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core
 ```
 
 ### Verify Installation
 ```bash
-~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf4llm; import docling; print('OK')"
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf; import pymupdf4llm; import docling; import docling_core; print('OK')"
 ```
 
 ## Quick Start
@@ -62,7 +62,7 @@ When user provides a PDF and wants full content in context:
 
 ### Step 1: Ensure the skill venv exists
 ```bash
-test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling)
+test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core)
 ```
 
 ### Step 2: Convert PDF to Markdown
@@ -219,18 +219,13 @@ Cache Options:
   --cache-stats     Show cache statistics and exit
 ```
 
-**Performance:** For PDFs with 100+ pages, the script automatically uses parallel processing across all CPU cores. This provides 3-6x speedup on large documents.
+**Performance:** First extraction is cached, so subsequent requests for the same PDF are instant.
 
 ## Advanced Usage
 
 ### Extract Specific Pages
 ```bash
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --pages 1-10 --stdout
-```
-
-### Get Page-by-Page Chunks with Metadata
-```bash
-~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --chunked --stdout
 ```
 
 ### Handle Scanned PDFs (OCR)
@@ -248,7 +243,7 @@ brew install tesseract
 ### "No module named pymupdf4llm" or venv doesn't exist
 Recreate the skill's virtual environment:
 ```bash
-cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf4llm docling
+cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core
 ```
 
 ### Poor extraction quality
@@ -259,9 +254,7 @@ cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip i
 - For scanned PDFs, ensure Tesseract OCR is installed: `brew install tesseract`
 
 ### Very large PDFs
-- Parallel processing is automatic for 100+ pages (uses all CPU cores)
 - Use `--pages` to extract only needed sections
-- Use `--workers N` to limit CPU usage if needed
 - Use `--no-images` to skip image extraction (faster)
 
 ### Tables not formatting correctly

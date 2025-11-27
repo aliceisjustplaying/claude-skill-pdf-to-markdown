@@ -29,4 +29,5 @@ Thumbs.db
 *.pdf
 *.md
 !SKILL.md
+!README.md
 /tmp/
