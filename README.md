@@ -17,7 +17,12 @@ Convert PDF documents to clean, structured Markdown with table and image extract
 ```bash
 cd ~/.claude/skills/pdf-to-markdown
 uv venv .venv
-uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core
+
+# For fast mode (default):
+uv pip install --python .venv/bin/python pymupdf pymupdf4llm
+
+# For --docling mode (high-accuracy tables):
+uv pip install --python .venv/bin/python pymupdf docling docling-core
 ```
 
 ## Usage
@@ -49,7 +54,7 @@ uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-cor
 | `--no-images` | Skip image extraction |
 | `--no-metadata` | Skip metadata header |
 | `--no-cache` | Bypass cache (still updates it) |
-| `--clear-cache` | Clear cache for this PDF |
+| `--clear-cache` | Clear cache for this PDF (works even if PDF deleted) |
 | `--clear-all-cache` | Clear entire cache |
 | `--cache-stats` | Show cache statistics |
 

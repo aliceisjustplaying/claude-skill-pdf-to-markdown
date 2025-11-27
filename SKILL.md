@@ -31,12 +31,23 @@ This skill uses a dedicated virtual environment at `~/.claude/skills/pdf-to-mark
 
 ### First-Time Setup (if .venv doesn't exist)
 ```bash
+# For fast mode only (PyMuPDF):
+cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm
+
+# For --docling mode (high-accuracy tables):
+cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf docling docling-core
+
+# Or install everything:
 cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core
 ```
 
 ### Verify Installation
 ```bash
-~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf; import pymupdf4llm; import docling; import docling_core; print('OK')"
+# Verify fast mode:
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf; import pymupdf4llm; print('OK')"
+
+# Verify docling mode:
+~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf; import docling; import docling_core; print('OK')"
 ```
 
 ## Quick Start
@@ -62,7 +73,8 @@ When user provides a PDF and wants full content in context:
 
 ### Step 1: Ensure the skill venv exists
 ```bash
-test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core)
+# For fast mode (default):
+test -d ~/.claude/skills/pdf-to-markdown/.venv || (cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm)
 ```
 
 ### Step 2: Convert PDF to Markdown
@@ -214,7 +226,7 @@ Options:
 
 Cache Options:
   --no-cache        Bypass cache, process fresh (still updates cache)
-  --clear-cache     Clear cache for this PDF before processing
+  --clear-cache     Clear cache for this PDF (works even if PDF was deleted)
   --clear-all-cache Clear entire cache directory and exit
   --cache-stats     Show cache statistics and exit
 ```
@@ -243,7 +255,11 @@ brew install tesseract
 ### "No module named pymupdf4llm" or venv doesn't exist
 Recreate the skill's virtual environment:
 ```bash
-cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm docling docling-core
+# For fast mode:
+cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf pymupdf4llm
+
+# For docling mode:
+cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip install --python .venv/bin/python pymupdf docling docling-core
 ```
 
 ### Poor extraction quality
