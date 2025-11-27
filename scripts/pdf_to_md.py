@@ -28,6 +28,7 @@ import re
 import json
 import hashlib
 import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -305,44 +306,47 @@ def get_cache_stats() -> dict:
 # =============================================================================
 
 
-def check_dependencies():
-    """Check if required packages are installed."""
+def check_dependencies(docling_mode: bool = False):
+    """
+    Check if required packages are installed for the requested mode.
+
+    Args:
+        docling_mode: If True, check for Docling dependencies.
+                      If False, check for fast mode (PyMuPDF) dependencies.
+    """
     missing = []
 
-    # Core dependencies
-    try:
-        import docling
-    except ImportError:
-        missing.append("docling")
-
+    # pymupdf is always needed (for page count, image extraction in fast mode)
     try:
         import pymupdf
     except ImportError:
         missing.append("pymupdf")
 
-    try:
-        import pymupdf4llm
-    except ImportError:
-        missing.append("pymupdf4llm")
+    if docling_mode:
+        # Docling mode requires docling + docling_core
+        try:
+            import docling
+        except ImportError:
+            missing.append("docling")
 
-    try:
-        import docling_core
-    except ImportError:
-        missing.append("docling-core")
+        try:
+            import docling_core
+        except ImportError:
+            missing.append("docling-core")
 
-    # Optional but recommended
-    try:
-        import huggingface_hub
-    except ImportError:
-        # huggingface_hub is optional (used for model cache checking)
-        pass
+        install_cmd = "uv pip install pymupdf docling docling-core"
+    else:
+        # Fast mode requires pymupdf4llm
+        try:
+            import pymupdf4llm
+        except ImportError:
+            missing.append("pymupdf4llm")
+
+        install_cmd = "uv pip install pymupdf pymupdf4llm"
 
     if missing:
         print(f"ERROR: Missing dependencies: {', '.join(missing)}", file=sys.stderr)
-        print(
-            "Install with: uv pip install docling pymupdf pymupdf4llm docling-core",
-            file=sys.stderr,
-        )
+        print(f"Install with: {install_cmd}", file=sys.stderr)
         return False
 
     return True
@@ -553,16 +557,18 @@ def add_metadata_header(
 
 
 def setup_temp_image_dir(pdf_path):
-    """Create temporary image directory for extraction."""
+    """
+    Create temporary image directory for extraction.
+
+    Uses tempfile.mkdtemp() for:
+    - Unique directory names (safe for concurrent runs)
+    - Cross-platform compatibility (works on Windows)
+    """
     pdf_name = Path(pdf_path).stem
     safe_name = re.sub(r"[^\w\-_]", "_", pdf_name)
-    image_dir = Path("/tmp/pdf_images") / safe_name
-
-    if image_dir.exists():
-        shutil.rmtree(image_dir)
-
-    image_dir.mkdir(parents=True, exist_ok=True)
-    return str(image_dir)
+    # Create unique temp directory with prefix based on PDF name
+    image_dir = tempfile.mkdtemp(prefix=f"pdf_images_{safe_name}_")
+    return image_dir
 
 
 # =============================================================================
@@ -665,6 +671,16 @@ Caching:
     if not args.input:
         parser.error("the following arguments are required: input")
 
+    # Handle --clear-cache before existence check (allows clearing cache for deleted PDFs)
+    if args.clear_cache:
+        if clear_cache(args.input):
+            print(f"Cache cleared for: {args.input}", file=sys.stderr)
+        else:
+            print(f"No cache found for: {args.input}", file=sys.stderr)
+        # If only clearing cache and file doesn't exist, exit successfully
+        if not os.path.exists(args.input):
+            sys.exit(0)
+
     # Validate input
     if not os.path.exists(args.input):
         print(f"ERROR: File not found: {args.input}", file=sys.stderr)
@@ -673,23 +689,14 @@ Caching:
     if not args.input.lower().endswith(".pdf"):
         print(f"WARNING: File may not be a PDF: {args.input}", file=sys.stderr)
 
-    # Check dependencies
-    if not check_dependencies():
+    # Check dependencies for the requested mode
+    if not check_dependencies(docling_mode=args.docling):
         sys.exit(1)
 
-    # Clear cache for this specific PDF if requested
-    if args.clear_cache:
-        if clear_cache(args.input):
-            print(f"Cache cleared for: {args.input}", file=sys.stderr)
-        else:
-            print(f"No cache found for: {args.input}", file=sys.stderr)
-
     # Get total pages
-    import pymupdf
+    from extractor import get_page_count
 
-    doc = pymupdf.open(args.input)
-    total_pages = len(doc)
-    doc.close()
+    total_pages = get_page_count(args.input)
 
     # Parse page range (for output slicing, not extraction)
     requested_pages = parse_page_range(args.pages, total_pages) if args.pages else None
@@ -758,13 +765,21 @@ Caching:
             if show_progress:
                 print(f"Cached: {get_cache_dir(cache_key)}", file=sys.stderr)
 
-        # Set image_dir to cached location (unless no_images is set)
+        # Set image_dir for output
+        # When --no-cache is set, always use temp_image_dir (don't reference stale cache)
+        # Otherwise, prefer cached location if available
         if not args.no_images:
-            cached_image_dir = get_cache_dir(cache_key) / "images"
-            if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
-                image_dir = cached_image_dir
-            else:
+            if args.no_cache:
                 image_dir = temp_image_dir
+            else:
+                cached_image_dir = get_cache_dir(cache_key) / "images"
+                if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
+                    image_dir = cached_image_dir
+                    # Clean up temp directory since images are now in cache
+                    if temp_image_dir and os.path.exists(temp_image_dir):
+                        shutil.rmtree(temp_image_dir)
+                else:
+                    image_dir = temp_image_dir
 
         # Slice pages if requested (after caching full result)
         if requested_pages:
