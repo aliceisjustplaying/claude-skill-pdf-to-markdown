@@ -11,7 +11,9 @@ from pathlib import Path
 # Format: major.minor.patch
 # 3.1.0: Page separators now use <!-- PAGE_BREAK --> instead of -----
 #        Image extraction includes nested XObjects (full=True)
-EXTRACTOR_VERSION = "3.1.0"
+# 3.2.0: Fast mode now includes image references in markdown (write_images=True)
+#        Cache keys now include no_images flag to avoid contamination
+EXTRACTOR_VERSION = "3.2.0"
 
 
 def check_docling_models():
@@ -27,7 +29,9 @@ def check_docling_models():
         return False
 
 
-def extract_pdf_fast(pdf_path: str, show_progress: bool = False) -> str:
+def extract_pdf_fast(
+    pdf_path: str, image_dir: str = None, show_progress: bool = False
+) -> str:
     """
     Fast PDF extraction using PyMuPDF with text-based table detection.
 
@@ -36,10 +40,11 @@ def extract_pdf_fast(pdf_path: str, show_progress: bool = False) -> str:
 
     Args:
         pdf_path: Path to the PDF file
+        image_dir: Directory to save extracted images (None = skip images)
         show_progress: Whether to show progress output
 
     Returns:
-        Markdown string of the PDF content
+        Markdown string of the PDF content with image references if image_dir provided
     """
     import pymupdf4llm
 
@@ -52,6 +57,8 @@ def extract_pdf_fast(pdf_path: str, show_progress: bool = False) -> str:
         pdf_path,
         show_progress=show_progress,
         table_strategy="text",  # Better for mixed table types
+        write_images=image_dir is not None,
+        image_path=image_dir,
     )
 
     # Replace pymupdf4llm's default page separator with explicit sentinel.
@@ -143,6 +150,20 @@ def extract_pdf_docling(
 
     # Convert the document
     result = converter.convert(pdf_path)
+
+    # Check for conversion errors
+    if hasattr(result, "errors") and result.errors:
+        for error in result.errors:
+            print(f"WARNING: Docling conversion error: {error}", file=sys.stderr)
+
+    # Check conversion status
+    from docling.datamodel.base_models import ConversionStatus
+
+    if hasattr(result, "status") and result.status != ConversionStatus.SUCCESS:
+        print(
+            f"WARNING: Docling conversion status: {result.status.name}",
+            file=sys.stderr,
+        )
 
     # Save images to output directory (order matters for placeholder replacement)
     image_paths = []
