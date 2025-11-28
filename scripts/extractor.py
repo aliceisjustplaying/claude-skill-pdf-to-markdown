@@ -4,8 +4,13 @@ PDF extraction with multiple backends:
 - Accurate mode: IBM Docling with TableFormer AI (better for complex/borderless tables)
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Suppress PyMuPDF's "Consider using pymupdf_layout" recommendation
+# This prints to stdout and pollutes --stdout output
+os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")
 
 # Version for cache invalidation - increment when extraction logic changes
 # Format: major.minor.patch
@@ -13,7 +18,9 @@ from pathlib import Path
 #        Image extraction includes nested XObjects (full=True)
 # 3.2.0: Fast mode now includes image references in markdown (write_images=True)
 #        Cache keys now include no_images flag to avoid contamination
-EXTRACTOR_VERSION = "3.2.0"
+# 3.3.0: Image paths in cached markdown now use relative 'images/' prefix
+#        (fixes broken temp directory references in cached output)
+EXTRACTOR_VERSION = "3.3.0"
 
 
 def check_docling_models():

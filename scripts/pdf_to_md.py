@@ -32,6 +32,10 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
+# Suppress PyMuPDF's "Consider using pymupdf_layout" recommendation
+# This must be set before any pymupdf imports to take effect
+os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")
+
 # Cache directory
 CACHE_DIR = Path.home() / ".cache" / "pdf-to-markdown"
 
@@ -59,16 +63,19 @@ def get_cache_key(
     stat = p.stat()
     file_size = stat.st_size
 
-    # Hash first 64KB + last 64KB for fast content-based identity
+    # Hash content for cache key identity
+    # For files <= 128KB: hash entire content (avoids collision for similar templates)
+    # For larger files: hash first 64KB + last 64KB for speed
     chunk_size = 65536  # 64KB
     hasher = hashlib.sha256()
 
     with open(p, "rb") as f:
-        # Read first chunk
-        hasher.update(f.read(chunk_size))
-
-        # Read last chunk (if file is large enough)
-        if file_size > chunk_size * 2:
+        if file_size <= chunk_size * 2:
+            # Small/medium files: hash entire content
+            hasher.update(f.read())
+        else:
+            # Large files: hash first + last chunks
+            hasher.update(f.read(chunk_size))
             f.seek(-chunk_size, 2)  # Seek from end
             hasher.update(f.read(chunk_size))
 
@@ -210,6 +217,33 @@ def load_from_cache(
     return full_md, image_dir, total_pages
 
 
+def normalize_image_paths_for_cache(markdown: str, source_image_dir: Path) -> str:
+    """
+    Normalize image paths in markdown to use relative 'images/' prefix.
+
+    This ensures cached markdown has stable paths that work when loaded later,
+    regardless of the original temp directory used during extraction.
+    """
+    if not source_image_dir:
+        return markdown
+
+    source_image_dir = Path(source_image_dir)
+
+    def normalize_ref(match):
+        alt_text = match.group(1)
+        filename_raw = match.group(2)
+        filename = Path(filename_raw).name
+
+        # Check if file exists in source directory
+        if (source_image_dir / filename).exists():
+            # Rewrite to relative path for cache storage
+            return f"![{alt_text}](images/{filename})"
+        return match.group(0)
+
+    pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+    return re.sub(pattern, normalize_ref, markdown)
+
+
 def save_to_cache(
     cache_key: str,
     markdown: str,
@@ -224,11 +258,18 @@ def save_to_cache(
 
     Uses temp files + os.replace() to ensure cache integrity even if
     the process is interrupted mid-write (power loss, Ctrl+C, etc.).
+
+    Image paths in markdown are normalized to 'images/<filename>' before
+    caching so they work correctly when loaded later.
     """
     from extractor import EXTRACTOR_VERSION
 
     cache_dir = get_cache_dir(cache_key)
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Normalize image paths before caching (convert temp paths to relative)
+    if image_dir:
+        markdown = normalize_image_paths_for_cache(markdown, image_dir)
 
     # Build metadata
     p = Path(pdf_path).resolve()
@@ -656,7 +697,10 @@ def get_image_info(image_dir, referenced_only: set = None):
 
 def enhance_markdown_with_image_paths(markdown, image_dir):
     """
-    Enhance image references in markdown with full absolute paths.
+    Rewrite image references in markdown to point to the actual image location.
+
+    This fixes broken references that point to temp directories by rewriting
+    the actual ![alt](path) to use the durable image_dir location.
     """
     if not image_dir:
         return markdown
@@ -683,9 +727,11 @@ def enhance_markdown_with_image_paths(markdown, image_dir):
                 except:
                     dims = "?"
 
-                return f"![{alt_text}]({filename_raw})\n\n**[Image: {filename} ({dims}, {size_kb}KB) → {full_path}]**"
+                # FIXED: Rewrite the actual image reference to the correct path
+                return f"![{alt_text}]({full_path})\n\n**[Image: {filename} ({dims}, {size_kb}KB)]**"
             except:
-                return f"![{alt_text}]({filename_raw})\n\n**[Image: {filename} → {full_path}]**"
+                # FIXED: Rewrite even on metadata failure
+                return f"![{alt_text}]({full_path})\n\n**[Image: {filename}]**"
 
         return match.group(0)
 
