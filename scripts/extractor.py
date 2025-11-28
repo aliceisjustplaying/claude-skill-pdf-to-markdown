@@ -9,7 +9,9 @@ from pathlib import Path
 
 # Version for cache invalidation - increment when extraction logic changes
 # Format: major.minor.patch
-EXTRACTOR_VERSION = "3.0.0"
+# 3.1.0: Page separators now use <!-- PAGE_BREAK --> instead of -----
+#        Image extraction includes nested XObjects (full=True)
+EXTRACTOR_VERSION = "3.1.0"
 
 
 def check_docling_models():
@@ -27,11 +29,10 @@ def check_docling_models():
 
 def extract_pdf_fast(pdf_path: str, show_progress: bool = False) -> str:
     """
-    Fast PDF extraction using PyMuPDF with multi-strategy table detection.
+    Fast PDF extraction using PyMuPDF with text-based table detection.
 
-    Tries multiple table detection strategies for better coverage:
-    - lines_strict: Best for bordered tables
-    - text: For borderless tables (whitespace-based)
+    Uses 'text' table strategy which handles borderless/whitespace-based
+    tables better than the default 'lines_strict' for mixed document types.
 
     Args:
         pdf_path: Path to the PDF file
@@ -52,6 +53,11 @@ def extract_pdf_fast(pdf_path: str, show_progress: bool = False) -> str:
         show_progress=show_progress,
         table_strategy="text",  # Better for mixed table types
     )
+
+    # Replace pymupdf4llm's default page separator with explicit sentinel.
+    # This prevents false splits when documents contain literal "-----"
+    # (horizontal rules, ASCII tables, etc.)
+    markdown = markdown.replace("\n-----\n", "\n<!-- PAGE_BREAK -->\n")
 
     return markdown
 
@@ -216,7 +222,9 @@ def extract_images(pdf_path: str, output_dir: str, show_progress: bool = False) 
 
     for page_num in range(len(doc)):
         page = doc[page_num]
-        images = page.get_images()
+        # full=True includes images nested inside form XObjects (common in
+        # documents exported from Word/PowerPoint)
+        images = page.get_images(full=True)
 
         for img_index, img in enumerate(images):
             try:
@@ -240,7 +248,12 @@ def extract_images(pdf_path: str, output_dir: str, show_progress: bool = False) 
                 extracted.append(str(img_path))
 
                 pix = None
-            except Exception:
+            except Exception as e:
+                # Log instead of silently swallowing errors
+                print(
+                    f"WARNING: Failed to extract image {img_index} on page {page_num + 1}: {e}",
+                    file=sys.stderr,
+                )
                 continue
 
     doc.close()

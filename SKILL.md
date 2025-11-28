@@ -93,9 +93,10 @@ PDFs are **aggressively cached** to avoid re-processing. First extraction is slo
 - **Cache location**: `~/.cache/pdf-to-markdown/<cache_key>/`
 - **Cache key**: Based on file path + size + modification time
 - **Full PDF cached**: Even if you request `--pages 1-10`, the full PDF is extracted and cached. Page slicing happens from the cached result.
-- **Invalidation**: Cache is only cleared when:
+- **Invalidation**: Cache is invalidated when:
   - Source PDF is modified (size or mtime changes)
-  - You explicitly clear it with `--clear-cache` or `--clear-all-cache`
+  - Extractor version changes (automatic re-extraction)
+  - Explicitly cleared with `--clear-cache` or `--clear-all-cache`
 
 ### Cache Commands
 ```bash
@@ -108,7 +109,7 @@ PDFs are **aggressively cached** to avoid re-processing. First extraction is slo
 # Show cache statistics
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py --cache-stats
 
-# Bypass cache for this run (still updates cache)
+# Bypass cache entirely (no read or write)
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --no-cache --stdout
 ```
 
@@ -225,10 +226,11 @@ Options:
   --no-progress     Disable progress indicator
 
 Cache Options:
-  --no-cache        Bypass cache, process fresh (still updates cache)
-  --clear-cache     Clear cache for this PDF (works even if PDF was deleted)
-  --clear-all-cache Clear entire cache directory and exit
-  --cache-stats     Show cache statistics and exit
+  --no-cache           Bypass cache entirely (no read or write)
+  --clear-cache        Clear cache for this PDF (works even if PDF was deleted)
+  --clear-all-cache    Clear entire cache directory and exit
+  --cache-stats        Show cache statistics and exit
+  --force-stale-cache  Use cached extraction even if version differs (when PDF missing)
 ```
 
 **Performance:** First extraction is cached, so subsequent requests for the same PDF are instant.

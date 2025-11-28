@@ -53,10 +53,11 @@ uv pip install --python .venv/bin/python pymupdf docling docling-core
 | `--docling` | Use Docling AI for high-accuracy tables |
 | `--no-images` | Skip image extraction |
 | `--no-metadata` | Skip metadata header |
-| `--no-cache` | Bypass cache (still updates it) |
+| `--no-cache` | Bypass cache entirely (no read or write) |
 | `--clear-cache` | Clear cache for this PDF (works even if PDF deleted) |
 | `--clear-all-cache` | Clear entire cache |
 | `--cache-stats` | Show cache statistics |
+| `--force-stale-cache` | Use cached extraction even if version differs (when PDF missing) |
 
 ## Project Structure
 
