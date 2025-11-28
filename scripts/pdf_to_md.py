@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
 PDF to Markdown Converter for LLM Context
+
 Extracts entire PDF content as clean, structured markdown.
-Images are extracted to cache directory by default.
+Images are extracted to cache directory and copied to output location.
 
 Features:
 - High-accuracy table extraction using IBM Docling (TableFormer AI model)
 - Aggressive persistent caching (extracts once, reuses forever)
-- Full PDF cached, pages sliced on demand
 - Cache only cleared on explicit request or source file change
 
 Usage:
     python pdf_to_md.py <input.pdf> [output.md]
-    python pdf_to_md.py <input.pdf> --stdout
-    python pdf_to_md.py <input.pdf> --pages 1-5
-    python pdf_to_md.py <input.pdf> --clear-cache
-    python pdf_to_md.py --clear-all-cache
+    python pdf_to_md.py <input.pdf> --docling      # Accurate tables (slower)
+    python pdf_to_md.py <input.pdf> --clear-cache  # Re-extract
+    python pdf_to_md.py --clear-all-cache          # Clear entire cache
 
 Dependencies:
-    uv pip install docling pymupdf
+    uv pip install pymupdf pymupdf4llm   # Fast mode
+    uv pip install docling docling-core  # Docling mode (optional)
 """
 
 import argparse
@@ -46,7 +46,6 @@ class ExtractionConfig:
     pdf_path: str
     docling: bool = False
     images_scale: float = 4.0
-    no_images: bool = False
 
 
 @dataclass
@@ -58,8 +57,8 @@ class ExtractionResult:
     total_pages: int
     from_cache: bool = False
 
+
 # Suppress PyMuPDF's "Consider using pymupdf_layout" recommendation
-# This must be set before any pymupdf imports to take effect
 os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")
 
 # Default cache directory
@@ -72,20 +71,17 @@ DEFAULT_CACHE_DIR = Path.home() / ".cache" / "pdf-to-markdown"
 
 
 class CacheManager:
-    """Manages PDF extraction cache with clear ownership."""
+    """Manages PDF extraction cache."""
 
     def __init__(self, cache_dir: Path = None):
         self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
 
     def get_key(self, config: ExtractionConfig) -> str:
-        """Generate cache key from file content + size + mode (path-independent)."""
+        """Generate cache key from file content + size + mode."""
         p = Path(config.pdf_path).resolve()
         stat = p.stat()
         file_size = stat.st_size
 
-        # Hash content for cache key identity
-        # For files <= 128KB: hash entire content (avoids collision for similar templates)
-        # For larger files: hash first 64KB + last 64KB for speed
         chunk_size = 65536  # 64KB
         hasher = hashlib.sha256()
 
@@ -97,16 +93,7 @@ class CacheManager:
                 f.seek(-chunk_size, 2)
                 hasher.update(f.read(chunk_size))
 
-        # Include images_scale in mode for Docling (affects extracted image resolution)
-        if config.docling:
-            mode = f"docling_{config.images_scale}"
-        else:
-            mode = "fast"
-
-        # Include no_images flag to avoid cache contamination
-        if config.no_images:
-            mode += "_noimages"
-
+        mode = f"docling_{config.images_scale}" if config.docling else "fast"
         raw = f"{file_size}|{hasher.hexdigest()}|{mode}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -114,23 +101,8 @@ class CacheManager:
         """Get cache directory for a given cache key."""
         return self.cache_dir / cache_key
 
-    def _get_cached_total_pages(self, cache_key: str) -> int:
-        """Get total_pages from cache metadata without loading full content."""
-        cache_dir = self._get_dir(cache_key)
-        metadata_file = cache_dir / "metadata.json"
-        try:
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-            return metadata.get("total_pages", 0)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return 0
-
     def is_valid(self, config: ExtractionConfig) -> tuple[bool, str]:
-        """Check if valid cache exists for this PDF.
-
-        Returns:
-            (is_valid: bool, cache_key: str)
-        """
+        """Check if valid cache exists for this PDF."""
         from extractor import EXTRACTOR_VERSION
 
         try:
@@ -165,13 +137,8 @@ class CacheManager:
         except (json.JSONDecodeError, KeyError, OSError):
             return False, cache_key
 
-    def load(
-        self, cache_key: str, pages: list = None, no_images: bool = False
-    ) -> ExtractionResult | None:
-        """Load markdown from cache, optionally slice specific pages.
-
-        Returns ExtractionResult or None if cache is corrupted.
-        """
+    def load(self, cache_key: str) -> ExtractionResult | None:
+        """Load markdown from cache."""
         cache_dir = self._get_dir(cache_key)
 
         try:
@@ -191,20 +158,11 @@ class CacheManager:
                 pass
             return None
 
-        # Check for cached images (skip if no_images flag is set)
+        # Get cached images directory
         image_dir = None
-        if not no_images:
-            cached_image_dir = cache_dir / "images"
-            if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
-                image_dir = cached_image_dir
-        else:
-            # Strip image references when --no-images requested but cache has them
-            # This prevents broken links when loading from a cache with images
-            full_md = self._strip_image_references(full_md)
-
-        # Slice pages if requested
-        if pages:
-            full_md = slice_pages_from_markdown(full_md, pages, total_pages)
+        cached_image_dir = cache_dir / "images"
+        if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
+            image_dir = cached_image_dir
 
         return ExtractionResult(
             markdown=full_md,
@@ -212,18 +170,6 @@ class CacheManager:
             total_pages=total_pages,
             from_cache=True,
         )
-
-    def _strip_image_references(self, markdown: str) -> str:
-        """Remove image references from markdown, leaving alt text as placeholder."""
-
-        def replace_image(match):
-            alt_text = match.group(1)
-            if alt_text:
-                return f"[Image: {alt_text}]"
-            return "[Image]"
-
-        pattern = r"!\[([^\]]*)\]\([^)]+\)"
-        return re.sub(pattern, replace_image, markdown)
 
     def _normalize_image_paths(self, markdown: str, source_image_dir: Path) -> str:
         """Normalize image paths in markdown to use relative 'images/' prefix."""
@@ -243,12 +189,7 @@ class CacheManager:
         pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
         return re.sub(pattern, normalize_ref, markdown)
 
-    def save(
-        self,
-        cache_key: str,
-        result: ExtractionResult,
-        config: ExtractionConfig,
-    ):
+    def save(self, cache_key: str, result: ExtractionResult, config: ExtractionConfig):
         """Save full extraction to cache using atomic writes."""
         from extractor import EXTRACTOR_VERSION
 
@@ -259,12 +200,9 @@ class CacheManager:
         if result.image_dir:
             markdown = self._normalize_image_paths(markdown, result.image_dir)
 
-        # Build metadata
         p = Path(config.pdf_path).resolve()
         stat = p.stat()
         mode = f"docling_{config.images_scale}" if config.docling else "fast"
-        if config.no_images:
-            mode += "_noimages"
 
         metadata = {
             "source_path": str(p),
@@ -276,7 +214,6 @@ class CacheManager:
             "extractor_version": EXTRACTOR_VERSION,
             "mode": mode,
             "images_scale": config.images_scale if config.docling else None,
-            "no_images": config.no_images,
         }
 
         temp_md = None
@@ -322,77 +259,19 @@ class CacheManager:
             if temp_json and os.path.exists(temp_json):
                 os.unlink(temp_json)
 
-    def find_by_source(
-        self, pdf_path: str, docling: bool = None, images_scale: float = None
-    ) -> list:
-        """Find cache entries by source path in metadata.
-
-        Used as fallback when the source PDF no longer exists.
-        Returns list of (cache_dir, metadata) tuples sorted by cached_at (freshest first).
-        """
-        if not self.cache_dir.exists():
-            return []
-
-        pdf_path_resolved = str(Path(pdf_path).resolve())
-        matching = []
-
-        for entry in self.cache_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            metadata_file = entry / "metadata.json"
-            if not metadata_file.exists():
-                continue
-            try:
-                with open(metadata_file) as f:
-                    metadata = json.load(f)
-
-                if metadata.get("source_path") != pdf_path_resolved:
-                    continue
-
-                if docling is not None:
-                    cached_mode = metadata.get("mode")
-                    if cached_mode is None:
-                        continue
-                    if docling and not cached_mode.startswith("docling"):
-                        continue
-                    # Match fast mode including fast_noimages variant
-                    if not docling and not cached_mode.startswith("fast"):
-                        continue
-
-                    if docling and images_scale is not None:
-                        cached_scale = metadata.get("images_scale")
-                        if cached_scale is not None and cached_scale != images_scale:
-                            continue
-
-                matching.append((entry, metadata))
-            except (json.JSONDecodeError, OSError):
-                continue
-
-        matching.sort(key=lambda x: x[1].get("cached_at", ""), reverse=True)
-        return matching
-
     def clear(self, pdf_path: str = None) -> bool:
-        """Clear cache for specific PDF (all modes and scale variants) or entire cache."""
+        """Clear cache for specific PDF or entire cache."""
         if pdf_path:
-            cleared = False
-
             try:
                 config = ExtractionConfig(pdf_path=pdf_path)
                 cache_key = self.get_key(config)
                 cache_dir = self._get_dir(cache_key)
                 if cache_dir.exists():
                     shutil.rmtree(cache_dir)
-                    cleared = True
+                    return True
             except (FileNotFoundError, OSError):
                 pass
-
-            matching_caches = self.find_by_source(pdf_path)
-            for cache_dir, _metadata in matching_caches:
-                if cache_dir.exists():
-                    shutil.rmtree(cache_dir)
-                    cleared = True
-
-            return cleared
+            return False
         else:
             if self.cache_dir.exists():
                 shutil.rmtree(self.cache_dir)
@@ -427,7 +306,7 @@ class CacheManager:
 
 
 class ImageManager:
-    """Manages image extraction and cleanup with proper lifecycle."""
+    """Manages image extraction and cleanup."""
 
     def __init__(self):
         self._temp_dirs: list[Path] = []
@@ -447,12 +326,6 @@ class ImageManager:
                 shutil.rmtree(temp_dir)
         self._temp_dirs.clear()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.cleanup()
-
     def extract_references(self, markdown: str) -> set:
         """Extract the set of image filenames referenced in markdown."""
         pattern = r"!\[[^\]]*\]\(([^)]+)\)"
@@ -461,23 +334,14 @@ class ImageManager:
 
     def get_info(self, image_dir: Path, referenced_only: set = None) -> list:
         """Get information about extracted images."""
-        if not image_dir:
+        if not image_dir or not Path(image_dir).exists():
             return []
 
         image_dir = Path(image_dir)
-        if not image_dir.exists():
-            return []
-
         images = []
+
         for img_path in sorted(image_dir.glob("*")):
-            if img_path.suffix.lower() in (
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".bmp",
-                ".webp",
-            ):
+            if img_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
                 if referenced_only is not None and img_path.name not in referenced_only:
                     continue
 
@@ -487,21 +351,18 @@ class ImageManager:
 
                     try:
                         import pymupdf
-
                         pix = pymupdf.Pixmap(str(img_path))
                         dimensions = f"{pix.width}x{pix.height}"
                         pix = None
                     except Exception:
                         dimensions = "unknown"
 
-                    images.append(
-                        {
-                            "filename": img_path.name,
-                            "path": str(img_path),
-                            "size_kb": round(size_kb, 1),
-                            "dimensions": dimensions,
-                        }
-                    )
+                    images.append({
+                        "filename": img_path.name,
+                        "path": str(img_path),
+                        "size_kb": round(size_kb, 1),
+                        "dimensions": dimensions,
+                    })
                 except Exception:
                     pass
 
@@ -525,7 +386,6 @@ class ImageManager:
                     size_kb = round(full_path.stat().st_size / 1024, 1)
                     try:
                         import pymupdf
-
                         pix = pymupdf.Pixmap(str(full_path))
                         dims = f"{pix.width}x{pix.height}"
                         pix = None
@@ -565,19 +425,12 @@ class ImageManager:
         return "\n".join(lines)
 
     def finalize_images(
-        self,
-        temp_dir: Path,
-        cache_dir: Path = None,
-        output_dir: Path = None,
-        no_cache: bool = False,
-        show_progress: bool = False,
+        self, temp_dir: Path, cache_dir: Path, output_dir: Path, show_progress: bool = False
     ) -> Path | None:
         """Finalize image directory after extraction.
 
-        Handles:
-        - Copying to output location when --no-cache
-        - Returning cached location when caching enabled
-        - Cleaning up temp directories
+        Copies images from cache to output location.
+        Cleans up temp directories.
 
         Returns the final image directory to use for output.
         """
@@ -585,101 +438,45 @@ class ImageManager:
             return None
 
         temp_dir = Path(temp_dir)
+
+        # Clean up empty temp directories
         if not temp_dir.exists() or not any(temp_dir.iterdir()):
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            if temp_dir in self._temp_dirs:
+                self._temp_dirs.remove(temp_dir)
             return None
 
-        if no_cache:
-            if output_dir:
-                # Copy images to output location
-                output_images_dir = Path(str(output_dir).rsplit(".", 1)[0] + "_images")
-                if output_images_dir.exists():
-                    shutil.rmtree(output_images_dir)
-                shutil.copytree(temp_dir, output_images_dir)
-                # Clean up temp directory
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                    # Remove from tracking since we cleaned it up
-                    if temp_dir in self._temp_dirs:
-                        self._temp_dirs.remove(temp_dir)
-                if show_progress:
-                    print(f"Images copied to: {output_images_dir}", file=sys.stderr)
-                return output_images_dir
-            else:
-                # Outputting to stdout with --no-cache: clean up temp dir
-                # (--no-cache contract: don't leave any files behind)
-                print(
-                    "WARNING: --no-cache with stdout: images not available (would require temp files).",
-                    file=sys.stderr,
-                )
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                    if temp_dir in self._temp_dirs:
-                        self._temp_dirs.remove(temp_dir)
-                return None
-        else:
-            # Caching enabled - use cached location if available
-            if cache_dir:
-                cached_image_dir = cache_dir / "images"
-                if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
-                    # Clean up temp directory
-                    if temp_dir.exists():
-                        shutil.rmtree(temp_dir)
-                        if temp_dir in self._temp_dirs:
-                            self._temp_dirs.remove(temp_dir)
-                    return cached_image_dir
-            return None
+        # Clean up temp directory (images are saved to cache)
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+            if temp_dir in self._temp_dirs:
+                self._temp_dirs.remove(temp_dir)
+
+        # Use cached images
+        if cache_dir:
+            cached_image_dir = cache_dir / "images"
+            if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
+                return cached_image_dir
+
+        return None
 
 
 # =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-
-def slice_pages_from_markdown(full_md: str, pages: list, total_pages: int) -> str:
-    """Extract specific pages from full markdown.
-
-    Uses explicit <!-- PAGE_BREAK --> sentinels inserted during extraction.
-    """
-    page_pattern = r"\n<!-- PAGE_BREAK -->\n"
-    parts = re.split(page_pattern, full_md)
-
-    if len(parts) <= 1:
-        return full_md
-
-    selected_parts = []
-    for page_num in pages:
-        if 0 <= page_num < len(parts):
-            selected_parts.append(parts[page_num])
-
-    if not selected_parts:
-        return full_md
-
-    return "\n<!-- PAGE_BREAK -->\n".join(selected_parts)
-
-
-# =============================================================================
-# PDF PROCESSING FUNCTIONS
+# PDF PROCESSING
 # =============================================================================
 
 
 def check_dependencies(docling_mode: bool = False):
-    """
-    Check if required packages are installed for the requested mode.
-
-    Args:
-        docling_mode: If True, check for Docling dependencies.
-                      If False, check for fast mode (PyMuPDF) dependencies.
-    """
+    """Check if required packages are installed."""
     missing = []
 
-    # pymupdf is always needed (for page count, image extraction in fast mode)
     try:
         import pymupdf
     except ImportError:
         missing.append("pymupdf")
 
     if docling_mode:
-        # Docling mode requires docling + docling_core
         try:
             import docling
         except ImportError:
@@ -692,7 +489,6 @@ def check_dependencies(docling_mode: bool = False):
 
         install_cmd = "uv pip install pymupdf docling docling-core"
     else:
-        # Fast mode requires pymupdf4llm
         try:
             import pymupdf4llm
         except ImportError:
@@ -708,108 +504,14 @@ def check_dependencies(docling_mode: bool = False):
     return True
 
 
-class PageRangeError(ValueError):
-    """Error raised when page range string is invalid."""
-
-    pass
-
-
-def parse_page_range(page_str, total_pages):
-    """Parse page range string like '1-5' or '1,3,5-7'.
-
-    Raises:
-        PageRangeError: If the page range string is invalid (non-numeric, invalid range, etc.)
-    """
-    if not page_str:
-        return None
-
-    pages = []
-    requested_any = False  # Track if user specified at least one page token
-
-    for part in page_str.split(","):
-        part = part.strip()
-        if not part:
-            continue
-
-        if "-" in part:
-            parts = part.split("-", 1)
-            if len(parts) != 2 or not parts[0] or not parts[1]:
-                raise PageRangeError(
-                    f"Invalid range '{part}'. Expected format: start-end (e.g., '1-5')"
-                )
-            try:
-                start = int(parts[0])
-                end = int(parts[1])
-            except ValueError:
-                raise PageRangeError(
-                    f"Invalid range '{part}'. Page numbers must be integers."
-                )
-
-            if start > end:
-                raise PageRangeError(
-                    f"Invalid range '{part}'. Start page ({start}) cannot be greater than end page ({end})."
-                )
-            if start < 1:
-                raise PageRangeError(
-                    f"Invalid range '{part}'. Page numbers must be >= 1."
-                )
-
-            requested_any = True  # User specified a valid range
-            # Convert to 0-indexed
-            start_idx = start - 1
-            # end is inclusive, so no -1 for end
-            pages.extend(range(start_idx, min(end, total_pages)))
-        else:
-            try:
-                page = int(part)
-            except ValueError:
-                raise PageRangeError(
-                    f"Invalid page number '{part}'. Page numbers must be integers."
-                )
-            if page < 1:
-                raise PageRangeError(
-                    f"Invalid page number '{part}'. Page numbers must be >= 1."
-                )
-            requested_any = True  # User specified a valid page number
-            pages.append(page - 1)
-
-    result = sorted(set(p for p in pages if 0 <= p < total_pages))
-
-    if not result and requested_any:
-        # User specified pages but all are out of range
-        raise PageRangeError(
-            f"All requested pages are out of range. Document has {total_pages} pages."
-        )
-
-    return result
-
-
-def convert_pdf(
-    pdf_path,
-    image_dir=None,
-    no_images=False,
-    show_progress=False,
-    docling=False,
-    images_scale=4.0,
-):
-    """
-    Convert PDF to markdown.
-
-    Args:
-        pdf_path: Path to PDF file
-        image_dir: Directory to extract images to
-        no_images: Skip image extraction
-        show_progress: Show progress output
-        docling: Use Docling AI for high-accuracy tables (slower)
-        images_scale: Image resolution multiplier for Docling mode (default: 4.0)
-    """
+def convert_pdf(pdf_path, image_dir, show_progress=False, docling=False, images_scale=4.0):
+    """Convert PDF to markdown."""
     if docling:
         from extractor import extract_pdf_docling
 
-        # Docling extracts both text and images together
         markdown, _image_paths = extract_pdf_docling(
             pdf_path,
-            output_dir=image_dir if not no_images else None,
+            output_dir=image_dir,
             images_scale=images_scale,
             show_progress=show_progress,
         )
@@ -817,19 +519,15 @@ def convert_pdf(
     else:
         from extractor import extract_pdf_fast
 
-        # Fast mode: pymupdf4llm handles both text and image extraction
         markdown = extract_pdf_fast(
             pdf_path,
-            image_dir=image_dir if not no_images else None,
+            image_dir=image_dir,
             show_progress=show_progress,
         )
-
         return markdown
 
 
-def add_metadata_header(
-    markdown, pdf_path, total_pages, pages_extracted, image_dir=None, cached=False
-):
+def add_metadata_header(markdown, pdf_path, total_pages, image_dir=None, cached=False):
     """Add metadata header to markdown output."""
     filename = os.path.basename(pdf_path)
 
@@ -837,7 +535,6 @@ def add_metadata_header(
         "---",
         f"source: {filename}",
         f"total_pages: {total_pages}",
-        f"pages_extracted: {pages_extracted}",
         f"extracted_at: {datetime.now().isoformat()}",
     ]
 
@@ -864,31 +561,20 @@ def main():
         epilog="""
 Examples:
   python pdf_to_md.py document.pdf                    # Output to document.md (cached)
-  python pdf_to_md.py document.pdf --stdout           # Print to stdout
-  python pdf_to_md.py document.pdf --pages 1-10      # Only pages 1-10 (from cache)
-  python pdf_to_md.py document.pdf --no-cache        # Bypass cache
-  python pdf_to_md.py document.pdf --clear-cache     # Clear cache for this PDF
+  python pdf_to_md.py document.pdf output.md         # Custom output path
+  python pdf_to_md.py document.pdf --docling         # Accurate tables (slower)
+  python pdf_to_md.py document.pdf --clear-cache     # Clear cache and re-extract
   python pdf_to_md.py --clear-all-cache              # Clear entire cache
 
 Caching:
   PDFs are cached in ~/.cache/pdf-to-markdown/
-  Cache is keyed by file path + size + modification time.
-  Full PDF is always extracted and cached; --pages slices from cache.
+  Cache is keyed by file content hash + extraction mode.
   Cache persists until explicitly cleared or source PDF changes.
         """,
     )
 
     parser.add_argument("input", nargs="?", help="Input PDF file path")
-    parser.add_argument(
-        "output", nargs="?", help="Output markdown file path (default: <input>.md)"
-    )
-    parser.add_argument(
-        "--stdout", action="store_true", help="Print to stdout instead of file"
-    )
-    parser.add_argument(
-        "--pages",
-        help='Page range to extract (e.g., "1-5" or "1,3,5-7"). Note: only effective with fast mode (pymupdf4llm); Docling mode always extracts full document.',
-    )
+    parser.add_argument("output", nargs="?", help="Output markdown file path (default: <input>.md)")
     parser.add_argument(
         "--docling",
         "--accurate",
@@ -896,28 +582,9 @@ Caching:
         dest="docling",
         help="Use Docling AI for complex/borderless tables (slower, ~1 sec/page)",
     )
-    parser.add_argument(
-        "--images-scale",
-        type=float,
-        default=4.0,
-        help="Image resolution multiplier for Docling mode (default: 4.0)",
-    )
-    parser.add_argument(
-        "--no-images", action="store_true", help="Skip image extraction (faster)"
-    )
-    parser.add_argument(
-        "--no-metadata", action="store_true", help="Skip metadata header"
-    )
-    parser.add_argument(
-        "--no-progress", action="store_true", help="Disable progress indicator"
-    )
+    parser.add_argument("--no-progress", action="store_true", help="Disable progress indicator")
 
     # Cache options
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Bypass cache entirely (no read or write)",
-    )
     parser.add_argument(
         "--clear-cache",
         action="store_true",
@@ -928,21 +595,13 @@ Caching:
         action="store_true",
         help="Clear entire cache directory and exit",
     )
-    parser.add_argument(
-        "--cache-stats", action="store_true", help="Show cache statistics and exit"
-    )
-    parser.add_argument(
-        "--force-stale-cache",
-        action="store_true",
-        help="Use cached extraction even if extractor version differs (when PDF missing)",
-    )
+    parser.add_argument("--cache-stats", action="store_true", help="Show cache statistics and exit")
 
     args = parser.parse_args()
 
-    # Initialize cache manager
     cache_mgr = CacheManager()
 
-    # Handle cache management commands first
+    # Handle cache management commands
     if args.clear_all_cache:
         if cache_mgr.clear():
             print(f"Cache cleared: {cache_mgr.cache_dir}", file=sys.stderr)
@@ -961,124 +620,45 @@ Caching:
     if not args.input:
         parser.error("the following arguments are required: input")
 
-    # Handle --clear-cache before existence check (allows clearing cache for deleted PDFs)
+    # Handle --clear-cache
     if args.clear_cache:
         if cache_mgr.clear(args.input):
             print(f"Cache cleared for: {args.input}", file=sys.stderr)
         else:
             print(f"No cache found for: {args.input}", file=sys.stderr)
-        # If only clearing cache and file doesn't exist, exit successfully
-        if not os.path.exists(args.input):
-            sys.exit(0)
 
-    # Validate input and check for cache fallback
-    pdf_exists = os.path.exists(args.input)
-    cache_fallback = False
-    fallback_cache_dir = None
-
-    if not pdf_exists:
-        # Try to find cached extraction by source path, filtered by requested mode
-        if not args.no_cache:
-            # First try to find cache matching the requested mode/scale
-            matching_caches = cache_mgr.find_by_source(
-                args.input,
-                docling=args.docling,
-                images_scale=args.images_scale if args.docling else None,
-            )
-            # If no exact match, try any cache for this file
-            if not matching_caches:
-                matching_caches = cache_mgr.find_by_source(args.input)
-
-            if matching_caches:
-                # Use the freshest matching cache (already sorted by cached_at desc)
-                fallback_cache_dir, fallback_metadata = matching_caches[0]
-
-                # Check extractor version compatibility
-                from extractor import EXTRACTOR_VERSION
-
-                cached_version = fallback_metadata.get("extractor_version")
-                if cached_version != EXTRACTOR_VERSION and not args.force_stale_cache:
-                    print(
-                        f"ERROR: Cached extraction version mismatch",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"  Cached: {cached_version}, Current: {EXTRACTOR_VERSION}",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"  Re-extract with original PDF or use --force-stale-cache",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-
-                cache_fallback = True
-                cached_mode = fallback_metadata.get("mode", "unknown")
-                version_warning = ""
-                if cached_version != EXTRACTOR_VERSION:
-                    version_warning = f" [version {cached_version}, current is {EXTRACTOR_VERSION}]"
-                print(
-                    f"WARNING: Source PDF not found, using cached extraction ({cached_mode} mode){version_warning}",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"ERROR: File not found: {args.input}", file=sys.stderr)
-                print(
-                    "  (No cached extraction available either)",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        else:
-            print(f"ERROR: File not found: {args.input}", file=sys.stderr)
-            sys.exit(1)
-
-    if pdf_exists and not args.input.lower().endswith(".pdf"):
-        print(f"WARNING: File may not be a PDF: {args.input}", file=sys.stderr)
-
-    # Error if --pages used with --docling (page slicing not supported)
-    # Check early before any expensive operations
-    if args.pages and args.docling:
-        print(
-            "ERROR: --pages is not supported in Docling mode (no page delimiters in output). "
-            "Use fast mode (default) for page slicing, or omit --pages.",
-            file=sys.stderr,
-        )
+    # Validate input exists
+    if not os.path.exists(args.input):
+        print(f"ERROR: File not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    # Determine if progress should be shown
-    show_progress = sys.stderr.isatty() and not args.no_progress and not args.stdout
+    if not args.input.lower().endswith(".pdf"):
+        print(f"WARNING: File may not be a PDF: {args.input}", file=sys.stderr)
 
-    # Check cache FIRST (before dependency check)
-    # This allows using cached results even without extraction dependencies installed
-    cache_hit = False
-    cache_key = ""
+    show_progress = sys.stderr.isatty() and not args.no_progress
+
+    # Check cache
+    config = ExtractionConfig(pdf_path=args.input, docling=args.docling)
+    valid, cache_key = cache_mgr.is_valid(config)
+
     result = None
     image_dir = None
-    total_pages = 0
+    cache_hit = False
 
-    if cache_fallback:
-        # PDF missing, but we found a cached extraction
-        cache_key = fallback_cache_dir.name
-        total_pages = fallback_metadata.get("total_pages", 0)
-        cache_hit = True  # Will load below after page range parsing
-    elif not args.no_cache:
-        # Check if we have a valid cache for this PDF
-        config = ExtractionConfig(
-            pdf_path=args.input,
-            docling=args.docling,
-            images_scale=args.images_scale,
-            no_images=args.no_images,
-        )
-        valid, cache_key = cache_mgr.is_valid(config)
-        if valid:
-            # Get total_pages from cache metadata (doesn't load full content)
-            total_pages = cache_mgr._get_cached_total_pages(cache_key)
-            if total_pages > 0:
-                cache_hit = True  # Will load below after page range parsing
+    if valid:
+        if show_progress:
+            mode = "docling" if args.docling else "fast"
+            print(f"Loading from cache ({mode} mode)...", file=sys.stderr)
 
-    # If no cache hit, we need dependencies and page count from PDF
+        cache_result = cache_mgr.load(cache_key)
+        if cache_result:
+            result = cache_result.markdown
+            image_dir = cache_result.image_dir
+            total_pages = cache_result.total_pages
+            cache_hit = True
+
+    # Extract if no cache hit
     if not cache_hit:
-        # Check dependencies only when extraction is needed
         if not check_dependencies(docling_mode=args.docling):
             sys.exit(1)
 
@@ -1086,76 +666,12 @@ Caching:
 
         total_pages = get_page_count(args.input)
 
-    # Parse page range (for output slicing, not extraction)
-    try:
-        requested_pages = (
-            parse_page_range(args.pages, total_pages) if args.pages else None
-        )
-    except PageRangeError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        print(
-            "  Expected format: 1-5 or 1,3,5-7 (page numbers start at 1)",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    pages_to_output = len(requested_pages) if requested_pages else total_pages
-
-    # Now load from cache if we had a cache hit
-    if cache_hit:
-        if show_progress:
-            mode = "docling" if args.docling else "fast"
-            print(f"Loading from cache ({mode} mode)...", file=sys.stderr)
-        cache_result = cache_mgr.load(
-            cache_key, requested_pages, no_images=args.no_images
-        )
-        if cache_result is None:
-            if cache_fallback:
-                # Cache was corrupted and PDF doesn't exist - can't recover
-                print(
-                    "ERROR: Cache was corrupted and source PDF is not available.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            else:
-                # Cache was corrupted, treat as cache miss
-                cache_hit = False
-                # Need to check dependencies now since we're going to extract
-                if not check_dependencies(docling_mode=args.docling):
-                    sys.exit(1)
-        else:
-            result = cache_result.markdown
-            image_dir = cache_result.image_dir
-
-    # Determine output path early (needed for image handling)
-    output_path = None
-    if not args.stdout:
-        output_path = args.output or os.path.splitext(args.input)[0] + ".md"
-
-    # Use ImageManager for extraction with automatic cleanup
-    img_mgr = ImageManager()
-
-    # If no cache hit, extract full PDF
-    if not cache_hit:
-        # Build config if we don't have it
-        if "config" not in dir() or config is None:
-            config = ExtractionConfig(
-                pdf_path=args.input,
-                docling=args.docling,
-                images_scale=args.images_scale,
-                no_images=args.no_images,
-            )
-
-        # Get cache key if we don't have it
         if not cache_key:
             cache_key = cache_mgr.get_key(config)
 
-        # Setup image directory for extraction (temporary)
-        temp_image_dir = None
-        if not args.no_images:
-            temp_image_dir = img_mgr.create_temp_dir(args.input)
+        img_mgr = ImageManager()
+        temp_image_dir = img_mgr.create_temp_dir(args.input)
 
-        # Extract FULL PDF
         try:
             if show_progress:
                 if args.docling:
@@ -1172,82 +688,60 @@ Caching:
             result = convert_pdf(
                 args.input,
                 image_dir=temp_image_dir,
-                no_images=args.no_images,
                 show_progress=show_progress,
                 docling=args.docling,
-                images_scale=args.images_scale,
             )
         except Exception as e:
-            img_mgr.cleanup()  # Clean up on error
+            img_mgr.cleanup()
             print(f"ERROR: Conversion failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-        # Save to cache (full result)
-        if not args.no_cache:
-            extraction_result = ExtractionResult(
-                markdown=result,
-                image_dir=temp_image_dir,
-                total_pages=total_pages,
-            )
-            cache_mgr.save(cache_key, extraction_result, config)
-            if show_progress:
-                print(f"Cached: {cache_mgr._get_dir(cache_key)}", file=sys.stderr)
+        # Save to cache
+        extraction_result = ExtractionResult(
+            markdown=result,
+            image_dir=temp_image_dir,
+            total_pages=total_pages,
+        )
+        cache_mgr.save(cache_key, extraction_result, config)
+        if show_progress:
+            print(f"Cached: {cache_mgr._get_dir(cache_key)}", file=sys.stderr)
 
-        # Finalize image directory
-        if not args.no_images:
-            image_dir = img_mgr.finalize_images(
-                temp_dir=temp_image_dir,
-                cache_dir=cache_mgr._get_dir(cache_key) if not args.no_cache else None,
-                output_dir=output_path,
-                no_cache=args.no_cache,
-                show_progress=show_progress,
-            )
-
-        # Slice pages if requested (after caching full result)
-        if requested_pages:
-            result = slice_pages_from_markdown(result, requested_pages, total_pages)
+        # Finalize images
+        output_path = args.output or os.path.splitext(args.input)[0] + ".md"
+        image_dir = img_mgr.finalize_images(
+            temp_dir=temp_image_dir,
+            cache_dir=cache_mgr._get_dir(cache_key),
+            output_dir=output_path,
+            show_progress=show_progress,
+        )
 
     # Format output
     output = result
+    img_mgr_for_output = ImageManager()  # Fresh instance for output processing
 
-    # Extract referenced images before enhancement (for filtering summary)
-    referenced_images = img_mgr.extract_references(result) if result else set()
+    referenced_images = img_mgr_for_output.extract_references(result) if result else set()
 
-    # Enhance image references with full paths (skip if --no-images)
-    if image_dir and not args.no_images:
-        output = img_mgr.enhance_markdown(output, image_dir)
-
-        # Add image summary table at the end (filtered to referenced images only)
-        images = img_mgr.get_info(image_dir, referenced_only=referenced_images)
+    if image_dir:
+        output = img_mgr_for_output.enhance_markdown(output, image_dir)
+        images = img_mgr_for_output.get_info(image_dir, referenced_only=referenced_images)
         if images:
-            output += img_mgr.create_summary(images)
+            output += img_mgr_for_output.create_summary(images)
 
-    if not args.no_metadata:
-        output = add_metadata_header(
-            output,
-            args.input,
-            total_pages,
-            pages_to_output,
-            image_dir,
-            cached=cache_hit,
-        )
+    output = add_metadata_header(output, args.input, total_pages, image_dir, cached=cache_hit)
 
     # Write output
-    if args.stdout:
-        print(output)
-    else:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(output)
+    output_path = args.output or os.path.splitext(args.input)[0] + ".md"
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(output)
 
-        msg = f"Converted {pages_to_output} pages to: {output_path}"
-        if cache_hit:
-            msg += " (from cache)"
-        if image_dir and not args.no_images:
-            # Use the same filtered image set for consistency
-            images = img_mgr.get_info(image_dir, referenced_only=referenced_images)
-            if images:
-                msg += f" ({len(images)} images)"
-        print(msg, file=sys.stderr)
+    msg = f"Converted {total_pages} pages to: {output_path}"
+    if cache_hit:
+        msg += " (from cache)"
+    if image_dir:
+        images = img_mgr_for_output.get_info(image_dir, referenced_only=referenced_images)
+        if images:
+            msg += f" ({len(images)} images)"
+    print(msg, file=sys.stderr)
 
 
 if __name__ == "__main__":

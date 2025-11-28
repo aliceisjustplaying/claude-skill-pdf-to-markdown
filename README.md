@@ -10,7 +10,6 @@ Convert PDF documents to clean, structured Markdown with table and image extract
   - Accurate mode: IBM Docling AI (better for complex/borderless tables)
 - **Image extraction** to cache directory with paths in output
 - **Aggressive caching** - extract once, reuse forever
-- **Page slicing** - request specific pages from cached full extraction
 
 ## Installation
 
@@ -28,19 +27,13 @@ uv pip install --python .venv/bin/python pymupdf docling docling-core
 ## Usage
 
 ```bash
-# Basic conversion
-.venv/bin/python scripts/pdf_to_md.py document.pdf --stdout
+# Basic conversion (outputs to document.md)
+.venv/bin/python scripts/pdf_to_md.py document.pdf
 
 # High-accuracy tables (slower)
-.venv/bin/python scripts/pdf_to_md.py document.pdf --docling --stdout
+.venv/bin/python scripts/pdf_to_md.py document.pdf --docling
 
-# Specific pages
-.venv/bin/python scripts/pdf_to_md.py document.pdf --pages 1-10 --stdout
-
-# Skip images (faster)
-.venv/bin/python scripts/pdf_to_md.py document.pdf --no-images --stdout
-
-# Save to file
+# Custom output path
 .venv/bin/python scripts/pdf_to_md.py document.pdf output.md
 ```
 
@@ -48,18 +41,11 @@ uv pip install --python .venv/bin/python pymupdf docling docling-core
 
 | Option | Description |
 |--------|-------------|
-| `--stdout` | Print to stdout instead of file |
-| `--pages RANGE` | Page range (e.g., "1-5" or "1,3,5-7") |
 | `--docling` | Use Docling AI for high-accuracy tables |
-| `--images-scale N` | Image resolution multiplier for Docling mode (default: 4.0) |
-| `--no-images` | Skip image extraction |
-| `--no-metadata` | Skip metadata header |
 | `--no-progress` | Disable progress indicator |
-| `--no-cache` | Bypass cache entirely (no read or write) |
-| `--clear-cache` | Clear cache for this PDF (works even if PDF deleted) |
+| `--clear-cache` | Clear cache for this PDF and re-extract |
 | `--clear-all-cache` | Clear entire cache |
 | `--cache-stats` | Show cache statistics |
-| `--force-stale-cache` | Use cached extraction even if version differs (when PDF missing) |
 
 ## Project Structure
 
