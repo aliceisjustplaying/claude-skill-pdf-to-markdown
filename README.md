@@ -51,8 +51,10 @@ uv pip install --python .venv/bin/python pymupdf docling docling-core
 | `--stdout` | Print to stdout instead of file |
 | `--pages RANGE` | Page range (e.g., "1-5" or "1,3,5-7") |
 | `--docling` | Use Docling AI for high-accuracy tables |
+| `--images-scale N` | Image resolution multiplier for Docling mode (default: 4.0) |
 | `--no-images` | Skip image extraction |
 | `--no-metadata` | Skip metadata header |
+| `--no-progress` | Disable progress indicator |
 | `--no-cache` | Bypass cache entirely (no read or write) |
 | `--clear-cache` | Clear cache for this PDF (works even if PDF deleted) |
 | `--clear-all-cache` | Clear entire cache |
