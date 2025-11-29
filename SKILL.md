@@ -12,7 +12,7 @@ Extract complete PDF content as structured Markdown, preserving:
 - Lists (ordered and unordered)
 - Multi-column layouts (correct reading order)
 - Code blocks
-- **Images** (always extracted to cache with paths in output)
+- **Images** (extracted and copied next to output with relative paths)
 
 ## When to Use This Skill
 
@@ -54,7 +54,7 @@ cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python 
 # Convert PDF to markdown (always extracts images)
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf
 
-# Output: document.md + images in cache
+# Output: document.md + images/ folder (next to the .md file)
 ```
 
 ## Standard Workflow
@@ -112,9 +112,10 @@ PDFs are **aggressively cached** to avoid re-processing. First extraction is slo
 ## Image Handling
 
 Images are always extracted. They are:
-1. **Extracted** to cache directory `~/.cache/pdf-to-markdown/<cache_key>/images/`
-2. **Referenced** in the markdown with full paths
-3. **Summarized** in a table at the end of the document
+1. **Cached** in `~/.cache/pdf-to-markdown/<cache_key>/images/`
+2. **Copied** to `images/` folder next to the output `.md` file
+3. **Referenced** in the markdown with relative paths (`images/filename.png`)
+4. **Summarized** in a table at the end of the document
 
 ### Auto-View Behavior for Images
 
@@ -143,7 +144,7 @@ source: document.pdf
 total_pages: 42
 extracted_at: 2025-01-15T10:30:00
 from_cache: true
-images_dir: /Users/.../.cache/pdf-to-markdown/abc123/images
+images_dir: images
 ---
 ```
 
@@ -155,7 +156,7 @@ images_dir: /Users/.../.cache/pdf-to-markdown/abc123/images
 
 Regular paragraph text with **bold**, *italic*, and `code` formatting.
 
-![Figure 1](/Users/.../.cache/pdf-to-markdown/abc123/images/figure_1.png)
+![Figure 1](images/figure_1.png)
 
 **[Image: figure_1.png (800x600, 45.2KB)]**
 
@@ -170,10 +171,10 @@ Regular paragraph text with **bold**, *italic*, and `code` formatting.
 
 ## Extracted Images
 
-| # | File | Dimensions | Size | Path |
-|---|------|------------|------|------|
-| 1 | figure_1.png | 800x600 | 45.2KB | `~/.cache/.../images/figure_1.png` |
-| 2 | chart_2.png | 1200x800 | 89.1KB | `~/.cache/.../images/chart_2.png` |
+| # | File | Dimensions | Size |
+|---|------|------------|------|
+| 1 | figure_1.png | 800x600 | 45.2KB |
+| 2 | chart_2.png | 1200x800 | 89.1KB |
 ```
 
 ## Script Reference

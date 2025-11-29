@@ -158,11 +158,26 @@ class CacheManager:
                 pass
             return None
 
+        # Check if markdown references images
+        has_image_refs = bool(re.search(r"!\[[^\]]*\]\([^)]+\)", full_md))
+
         # Get cached images directory
-        image_dir = None
         cached_image_dir = cache_dir / "images"
-        if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
-            image_dir = cached_image_dir
+        has_images = cached_image_dir.exists() and any(cached_image_dir.iterdir())
+
+        # If markdown expects images but they're missing, invalidate cache
+        if has_image_refs and not has_images:
+            print(
+                "WARNING: Cache missing images, regenerating...",
+                file=sys.stderr,
+            )
+            try:
+                shutil.rmtree(cache_dir)
+            except OSError:
+                pass
+            return None
+
+        image_dir = cached_image_dir if has_images else None
 
         return ExtractionResult(
             markdown=full_md,
@@ -260,18 +275,21 @@ class CacheManager:
                 os.unlink(temp_json)
 
     def clear(self, pdf_path: str = None) -> bool:
-        """Clear cache for specific PDF or entire cache."""
+        """Clear cache for specific PDF (both fast and docling modes) or entire cache."""
         if pdf_path:
-            try:
-                config = ExtractionConfig(pdf_path=pdf_path)
-                cache_key = self.get_key(config)
-                cache_dir = self._get_dir(cache_key)
-                if cache_dir.exists():
-                    shutil.rmtree(cache_dir)
-                    return True
-            except (FileNotFoundError, OSError):
-                pass
-            return False
+            # Clear BOTH fast and docling caches for this PDF
+            cleared = False
+            for docling_mode in [False, True]:
+                try:
+                    config = ExtractionConfig(pdf_path=pdf_path, docling=docling_mode)
+                    cache_key = self.get_key(config)
+                    cache_dir = self._get_dir(cache_key)
+                    if cache_dir.exists():
+                        shutil.rmtree(cache_dir)
+                        cleared = True
+                except (FileNotFoundError, OSError):
+                    pass
+            return cleared
         else:
             if self.cache_dir.exists():
                 shutil.rmtree(self.cache_dir)
@@ -369,7 +387,7 @@ class ImageManager:
         return images
 
     def enhance_markdown(self, markdown: str, image_dir: Path) -> str:
-        """Rewrite image references to point to actual image location."""
+        """Rewrite image references to use relative paths (portable, Windows-safe)."""
         if not image_dir:
             return markdown
 
@@ -380,6 +398,9 @@ class ImageManager:
             filename_raw = match.group(2)
             filename = Path(filename_raw).name
             full_path = image_dir / filename
+
+            # Use relative path for portability (POSIX format for Windows compatibility)
+            relative_path = Path("images") / filename
 
             if full_path.exists():
                 try:
@@ -392,9 +413,9 @@ class ImageManager:
                     except Exception:
                         dims = "?"
 
-                    return f"![{alt_text}]({full_path})\n\n**[Image: {filename} ({dims}, {size_kb}KB)]**"
+                    return f"![{alt_text}]({relative_path.as_posix()})\n\n**[Image: {filename} ({dims}, {size_kb}KB)]**"
                 except Exception:
-                    return f"![{alt_text}]({full_path})\n\n**[Image: {filename}]**"
+                    return f"![{alt_text}]({relative_path.as_posix()})\n\n**[Image: {filename}]**"
 
             return match.group(0)
 
@@ -412,27 +433,27 @@ class ImageManager:
             "",
             "## Extracted Images",
             "",
-            "| # | File | Dimensions | Size | Path |",
-            "|---|------|------------|------|------|",
+            "| # | File | Dimensions | Size |",
+            "|---|------|------------|------|",
         ]
 
         for i, img in enumerate(images, 1):
             lines.append(
-                f"| {i} | {img['filename']} | {img['dimensions']} | {img['size_kb']}KB | `{img['path']}` |"
+                f"| {i} | {img['filename']} | {img['dimensions']} | {img['size_kb']}KB |"
             )
 
         lines.append("")
         return "\n".join(lines)
 
     def finalize_images(
-        self, temp_dir: Path, cache_dir: Path, output_dir: Path, show_progress: bool = False
+        self, temp_dir: Path, cache_dir: Path, output_path: Path, show_progress: bool = False
     ) -> Path | None:
         """Finalize image directory after extraction.
 
-        Copies images from cache to output location.
+        Copies images from cache to output location (next to the markdown file).
         Cleans up temp directories.
 
-        Returns the final image directory to use for output.
+        Returns the final image directory (next to output) for reference.
         """
         if not temp_dir:
             return None
@@ -453,13 +474,42 @@ class ImageManager:
             if temp_dir in self._temp_dirs:
                 self._temp_dirs.remove(temp_dir)
 
-        # Use cached images
+        # Copy images from cache to output location
         if cache_dir:
             cached_image_dir = cache_dir / "images"
             if cached_image_dir.exists() and any(cached_image_dir.iterdir()):
-                return cached_image_dir
+                return self._copy_images_to_output(cached_image_dir, output_path, show_progress)
 
         return None
+
+    def _copy_images_to_output(
+        self, source_dir: Path, output_path: Path, show_progress: bool = False
+    ) -> Path | None:
+        """Copy images from cache to output location (next to markdown file)."""
+        output_path = Path(output_path)
+
+        # Determine output images directory (sibling to markdown file)
+        if output_path.suffix:  # It's a file path like "output.md"
+            output_images_dir = output_path.parent / "images"
+        else:  # It's a directory
+            output_images_dir = output_path / "images"
+
+        # Don't copy if already at output location
+        if output_images_dir.resolve() == Path(source_dir).resolve():
+            return output_images_dir
+
+        # Copy images to output location
+        output_images_dir.mkdir(parents=True, exist_ok=True)
+        copied_count = 0
+        for img in source_dir.iterdir():
+            if img.is_file():
+                shutil.copy2(img, output_images_dir / img.name)
+                copied_count += 1
+
+        if show_progress and copied_count > 0:
+            print(f"Copied {copied_count} images to: {output_images_dir}", file=sys.stderr)
+
+        return output_images_dir
 
 
 # =============================================================================
@@ -542,7 +592,8 @@ def add_metadata_header(markdown, pdf_path, total_pages, image_dir=None, cached=
         header_lines.append("from_cache: true")
 
     if image_dir:
-        header_lines.append(f"images_dir: {image_dir}")
+        # Use relative path for portability
+        header_lines.append("images_dir: images")
 
     header_lines.extend(["---", "", ""])
 
@@ -653,9 +704,16 @@ Caching:
         cache_result = cache_mgr.load(cache_key)
         if cache_result:
             result = cache_result.markdown
-            image_dir = cache_result.image_dir
             total_pages = cache_result.total_pages
             cache_hit = True
+
+            # Copy images from cache to output location
+            if cache_result.image_dir:
+                output_path = args.output or os.path.splitext(args.input)[0] + ".md"
+                img_mgr = ImageManager()
+                image_dir = img_mgr._copy_images_to_output(
+                    cache_result.image_dir, output_path, show_progress
+                )
 
     # Extract if no cache hit
     if not cache_hit:
@@ -711,7 +769,7 @@ Caching:
         image_dir = img_mgr.finalize_images(
             temp_dir=temp_image_dir,
             cache_dir=cache_mgr._get_dir(cache_key),
-            output_dir=output_path,
+            output_path=output_path,
             show_progress=show_progress,
         )
 
