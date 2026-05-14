@@ -59,13 +59,16 @@ def extract_pdf_fast(
         print("Extracting with PyMuPDF (fast mode)...", file=sys.stderr)
 
     # Use text strategy which handles borderless tables better
-    # than the default lines_strict
+    # than the default lines_strict.
+    # Coerce paths to str: pdf_to_md.py passes image_dir as a pathlib.Path
+    # (from create_temp_dir), but pymupdf4llm calls .strip() on image_path,
+    # which raises "'WindowsPath' object has no attribute 'strip'" on Windows.
     markdown = pymupdf4llm.to_markdown(
-        pdf_path,
+        str(pdf_path),
         show_progress=show_progress,
         table_strategy="text",  # Better for mixed table types
         write_images=image_dir is not None,
-        image_path=image_dir,
+        image_path=str(image_dir) if image_dir is not None else None,
     )
 
     # Replace pymupdf4llm's default page separator with explicit sentinel.
