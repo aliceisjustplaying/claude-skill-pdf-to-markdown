@@ -1,6 +1,6 @@
 ---
 name: pdf-to-markdown
-description: Convert entire PDF documents to clean, structured Markdown for full context loading. Use this skill when the user wants to extract ALL text from a PDF into context (not grep/search), when discussing or analyzing PDF content in full, when the user mentions "load the whole PDF", "bring the PDF into context", "read the entire PDF", or when partial extraction/grepping would miss important context. This is the preferred method for PDF text extraction over page-by-page or grep approaches.
+description: Convert a PDF into a durable, structured Markdown artifact with extracted images. Use when the PDF's content should land in a reusable .md file — archiving, full-text search/grep, repeated reads across sessions, or reworking the material — or when the user says "convert this PDF to markdown". Do NOT use for a one-off look at a scanned or layout-heavy PDF (calendars, posters, slides read once): native visual PDF reading handles those better.
 ---
 
 # PDF to Markdown Converter
@@ -47,6 +47,23 @@ cd ~/.claude/skills/pdf-to-markdown && uv venv .venv && uv pip install --python 
 # Verify docling mode:
 ~/.claude/skills/pdf-to-markdown/.venv/bin/python -c "import pymupdf; import docling; import docling_core; print('OK')"
 ```
+
+### OCR Prerequisite (scanned PDFs only)
+
+Tesseract **and its language data** must be installed system-wide — PyMuPDF prints `OCR disabled because Tesseract language data not found` when only the binary is present:
+
+```bash
+# Arch Linux
+paru -S tesseract tesseract-data-eng tesseract-data-fra
+# Debian / Ubuntu
+sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra
+# Fedora
+sudo dnf install tesseract tesseract-langpack-eng tesseract-langpack-fra
+# macOS
+brew install tesseract
+```
+
+Add the language packs you need. If language data still isn't found, point `TESSDATA_PREFIX` at the tessdata directory (e.g. `/usr/share/tessdata`).
 
 ## Quick Start
 
@@ -132,6 +149,24 @@ And the user asks about something that might be visual (charts, graphs, diagrams
 - User: "What's in the diagram?" → Read the image file
 - User: "Describe the architecture shown" → Read the image file
 - User: "What are the results?" (and there's a results figure) → Read it
+
+### Image Captioning (for durable archives)
+
+When the output `.md` is meant to be **archived** (kept beyond the current session), make it self-contained: after conversion, use the Read tool on each extracted image and insert a 1–2 sentence description as a blockquote right under its reference:
+
+```markdown
+![Figure 1](images/figure_1.png)
+
+**[Image: figure_1.png (800x600, 45.2KB)]**
+> Network architecture diagram: DMZ with reverse proxy in front of two app servers; admin access via VPN only.
+```
+
+Rules:
+- Caption informative images (diagrams, charts, screenshots, photos); skip decorative ones (logos, separators, backgrounds).
+- Describe what the image *shows and means in context*, not its style.
+- Write captions in the document's language.
+
+This makes figures greppable and the archive usable without the source PDF. Skip this step for one-off conversions where the user only wants the text.
 
 ## Output Format
 
@@ -230,7 +265,7 @@ cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip i
 
 ### Poor extraction quality
 - Try `--docling` for complex tables
-- For scanned PDFs, ensure Tesseract OCR is installed: `brew install tesseract`
+- For scanned PDFs, ensure Tesseract OCR **and its language data** are installed (see "OCR Prerequisite" above)
 
 ### Tables not formatting correctly
 For complex tables, use `--docling` mode which uses IBM's TableFormer AI model.
