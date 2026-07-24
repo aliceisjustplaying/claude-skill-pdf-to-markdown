@@ -271,11 +271,19 @@ cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip i
 For complex tables, use `--docling` mode which uses IBM's TableFormer AI model.
 
 ### `--docling` crashes with `cudaErrorNoKernelImageForDevice`
-Docling auto-selects CUDA when torch detects a GPU, but the bundled torch wheel may lack kernels for your GPU architecture. Force CPU inference:
+Docling auto-selects CUDA when torch detects a GPU, but the bundled torch wheel may lack kernels for your GPU architecture (PyPI's default torch tracks the latest CUDA, which drops older GPUs — e.g. CUDA 13 dropped Maxwell/Pascal/Volta, `sm_50`–`sm_70`). Quick workaround — force CPU inference:
 ```bash
 CUDA_VISIBLE_DEVICES="" ~/.claude/skills/pdf-to-markdown/.venv/bin/python \
     ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --docling
 ```
+Durable fix when the GPU isn't worth using anyway (old/low-VRAM): reinstall torch as CPU-only — sheds ~3 GB of unused CUDA libraries from the venv and removes the need for the env var:
+```bash
+uv pip install --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python --reinstall \
+    'torch==2.13.0+cpu' 'torchvision==0.28.0+cpu' --index-url https://download.pytorch.org/whl/cpu
+uv pip uninstall --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python \
+    $(uv pip list --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python | awk '/^nvidia-/{print $1}')
+```
+(If the GPU is recent instead, install the torch build matching an older CUDA that still supports it, e.g. `--index-url https://download.pytorch.org/whl/cu126`.)
 
 ## Comparison with Other Approaches
 
