@@ -17,11 +17,11 @@ Extract complete PDF content as structured Markdown, preserving:
 ## When to Use This Skill
 
 **USE THIS** when:
-- User wants the "whole PDF" or "entire document" in context
-- Analyzing, summarizing, or discussing PDF content
-- User says "load", "read", "bring in", "extract" a PDF
-- Grepping/searching would miss context or structure
-- PDF has tables, formatting, or structure to preserve
+- The PDF's content should land in a reusable `.md` file: archiving, full-text search/grep, repeated reads across sessions, or reworking the material
+- User says "convert", "extract to markdown", or "archive" a PDF
+- PDF has tables, formatting, or structure worth preserving as text
+
+**DO NOT USE** for a one-off look at a PDF — especially scanned or layout-heavy documents (calendars, posters, slides read once): native visual PDF reading handles those better and leaves no artifact to clean up.
 
 ## Environment Setup
 
@@ -54,13 +54,13 @@ Tesseract **and its language data** must be installed system-wide — PyMuPDF pr
 
 ```bash
 # Arch Linux
-paru -S tesseract tesseract-data-eng tesseract-data-fra
+sudo pacman -S tesseract tesseract-data-eng tesseract-data-fra
 # Debian / Ubuntu
 sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra
 # Fedora
 sudo dnf install tesseract tesseract-langpack-eng tesseract-langpack-fra
 # macOS
-brew install tesseract
+brew install tesseract tesseract-lang
 ```
 
 Add the language packs you need. If language data still isn't found, point `TESSDATA_PREFIX` at the tessdata directory (e.g. `/usr/share/tessdata`).
@@ -168,6 +168,8 @@ Rules:
 
 This makes figures greppable and the archive usable without the source PDF. Skip this step for one-off conversions where the user only wants the text.
 
+⚠️ Captions live only in the output `.md`: the cache stores the **pre-caption** markdown, and re-running the conversion for the same PDF overwrites the output file, dropping them. Caption the copy at its archival destination (not the conversion output you might regenerate), and re-apply captions after any re-conversion.
+
 ## Output Format
 
 The markdown output includes:
@@ -264,25 +266,32 @@ cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip i
 ```
 
 ### Poor extraction quality
+
 - Try `--docling` for complex tables
 - For scanned PDFs, ensure Tesseract OCR **and its language data** are installed (see "OCR Prerequisite" above)
 
 ### Tables not formatting correctly
+
 For complex tables, use `--docling` mode which uses IBM's TableFormer AI model.
 
 ### `--docling` crashes with `cudaErrorNoKernelImageForDevice`
+
 Docling auto-selects CUDA when torch detects a GPU, but the bundled torch wheel may lack kernels for your GPU architecture (PyPI's default torch tracks the latest CUDA, which drops older GPUs — e.g. CUDA 13 dropped Maxwell/Pascal/Volta, `sm_50`–`sm_70`). Quick workaround — force CPU inference:
+
 ```bash
 CUDA_VISIBLE_DEVICES="" ~/.claude/skills/pdf-to-markdown/.venv/bin/python \
     ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --docling
 ```
+
 Durable fix when the GPU isn't worth using anyway (old/low-VRAM): reinstall torch as CPU-only — sheds ~3 GB of unused CUDA libraries from the venv and removes the need for the env var:
+
 ```bash
 uv pip install --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python --reinstall \
     'torch==2.13.0+cpu' 'torchvision==0.28.0+cpu' --index-url https://download.pytorch.org/whl/cpu
 uv pip uninstall --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python \
     $(uv pip list --python ~/.claude/skills/pdf-to-markdown/.venv/bin/python | awk '/^nvidia-/{print $1}')
 ```
+
 (If the GPU is recent instead, install the torch build matching an older CUDA that still supports it, e.g. `--index-url https://download.pytorch.org/whl/cu126`.)
 
 ## Comparison with Other Approaches
