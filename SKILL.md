@@ -270,6 +270,13 @@ cd ~/.claude/skills/pdf-to-markdown && rm -rf .venv && uv venv .venv && uv pip i
 ### Tables not formatting correctly
 For complex tables, use `--docling` mode which uses IBM's TableFormer AI model.
 
+### `--docling` crashes with `cudaErrorNoKernelImageForDevice`
+Docling auto-selects CUDA when torch detects a GPU, but the bundled torch wheel may lack kernels for your GPU architecture. Force CPU inference:
+```bash
+CUDA_VISIBLE_DEVICES="" ~/.claude/skills/pdf-to-markdown/.venv/bin/python \
+    ~/.claude/skills/pdf-to-markdown/scripts/pdf_to_md.py document.pdf --docling
+```
+
 ## Comparison with Other Approaches
 
 | Approach | Use Case | Limitations |
