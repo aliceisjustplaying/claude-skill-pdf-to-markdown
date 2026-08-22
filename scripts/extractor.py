@@ -37,7 +37,7 @@ def check_docling_models():
 
 
 def extract_pdf_fast(
-    pdf_path: str, image_dir: str = None, show_progress: bool = False
+    pdf_path: str, image_dir: "str | Path | None" = None, show_progress: bool = False
 ) -> str:
     """
     Fast PDF extraction using PyMuPDF with text-based table detection.
@@ -65,7 +65,7 @@ def extract_pdf_fast(
         show_progress=show_progress,
         table_strategy="text",  # Better for mixed table types
         write_images=image_dir is not None,
-        image_path=image_dir,
+        image_path=str(image_dir) if image_dir is not None else None,
     )
 
     # Replace pymupdf4llm's default page separator with explicit sentinel.
